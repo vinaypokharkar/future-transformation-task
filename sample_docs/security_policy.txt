@@ -1,0 +1,39 @@
+Acme Corporation — Information Security Policy
+
+Scope
+
+This policy applies to every employee, contractor, and third party with access
+to Acme systems or data.
+
+Passwords and Authentication
+
+Passwords must be at least twelve characters long and must not be reused across
+services. Multi-factor authentication is mandatory for all administrative
+accounts and for any system exposed to the public internet. Shared accounts are
+prohibited; where a shared credential is unavoidable, it must be stored in the
+company password manager and rotated whenever a team member leaves.
+
+Device Security
+
+Laptops must have full-disk encryption enabled before any company data is
+copied to them. Screens must lock automatically after ten minutes of
+inactivity. Lost or stolen devices must be reported to the security team
+immediately, and in any case within four hours of discovery.
+
+Data Classification
+
+Data is classified as Public, Internal, Confidential, or Restricted.
+Confidential and Restricted data must never be copied to personal devices or
+personal cloud storage accounts. Restricted data additionally requires
+encryption at rest and access logging.
+
+Incident Reporting
+
+Suspected security incidents must be reported to the security team without
+delay. Staff must not attempt to investigate or remediate an incident
+themselves, as this can destroy evidence needed for analysis.
+
+Third-Party Access
+
+Vendors requiring system access must sign a data processing agreement before
+access is granted. Access is time-limited and reviewed quarterly.
