@@ -587,9 +587,27 @@ retrieved chunk. Both are out of scope here, so it's measured and documented rat
 **The separation gap is narrow (+0.0606)** and tuned to this corpus. A different document set
 should re-run `scripts/calibrate.py` rather than inherit `0.2668`.
 
+**Images inside PDFs are ignored, and scans are rejected rather than half-accepted.** There are
+three cases, and the middle one is the trap:
+
+| PDF | Extracts | Result |
+|---|---|---|
+| Text + images (ordinary) | the text | Indexed; images ignored (no OCR) |
+| Image-only (a clean scan) | `""` | 422 — caught by the empty check |
+| **Mostly image + a page number** | `"3"` | **422 — caught by a text-density check** |
+
+The third case is the common real-world one: scans usually carry a thin text layer, so extraction
+returns something like `"3"`. That is not empty, so an emptiness check alone accepts it — the
+document reports `indexed` with `chunk_count=1`, the user believes it is searchable, and a vector
+for `"3"` sits in the index able to outrank a real answer. Density separates the cases: real PDFs
+here extract **675–775 characters per page**, a scan's text layer carries **0–20**, so the
+threshold is **100 chars/page** — roughly 7× below real documents and 5× above a scan. It applies
+to PDFs only; a 21-character `.txt` note is legitimate content.
+
 **Other limits:** single worker (ADR-007) · no OCR, so scanned PDFs return 422 by design · no
 refresh tokens (60-minute expiry, then log in again) · last-write-wins on concurrent task updates
-· no duplicate-upload detection.
+· no duplicate-upload detection · no rate limiting (measured: `/auth/login` accepts ~12,400
+password guesses/hour with no lockout — enumeration is defended, brute force is not).
 
 ---
 

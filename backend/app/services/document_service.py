@@ -141,12 +141,27 @@ def _index_document(
     text = extractor.extract_text(path, file_type)
 
     if extractor.is_extraction_empty(text):
-        # Almost always a scanned or image-only PDF. Failing loudly beats
-        # accepting a document that would never be findable.
+        # A fully image-only PDF. Failing loudly beats accepting a document
+        # that would never be findable.
         raise ValidationError(
             "No text could be extracted. Scanned or image-only PDFs are not "
             "supported (OCR is out of scope)."
         )
+
+    if file_type is FileType.PDF:
+        # The subtler scan: a page of images plus a text layer holding a page
+        # number. Not empty, so the check above misses it — and accepting it
+        # would report 'indexed' for a document whose actual content is
+        # unreachable, while poisoning the index with a vector for "3".
+        page_count = extractor.count_pdf_pages(path)
+        if extractor.is_pdf_text_too_sparse(text, page_count):
+            density = len(text.strip()) / page_count if page_count else 0
+            raise ValidationError(
+                f"This PDF contains almost no extractable text "
+                f"({density:.0f} characters per page across {page_count} page(s)). "
+                "It is most likely a scan or an image-only document; only its "
+                "page numbers or headers would be searchable. OCR is out of scope."
+            )
 
     chunks = chunker.chunk_text(text)
     if not chunks:
