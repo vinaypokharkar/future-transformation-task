@@ -1,0 +1,41 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+*.env
+!.env.example
+
+# Runtime artifacts — rebuildable from MySQL via scripts/reindex.py
+backend/data/*.index
+backend/uploads/*
+!backend/uploads/.gitkeep
+!backend/data/.gitkeep
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Local dev server output
+server.log
+server.err
+vite.log
+
+# Working documents — not part of the deliverable
+SPEC.md
+PLAN.md
+*.pdf
+!sample_docs/*.pdf
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.gstack/

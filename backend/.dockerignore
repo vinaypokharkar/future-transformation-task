@@ -1,0 +1,13 @@
+# The venv is Windows-built; copying it would shadow the Linux site-packages.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets never enter the image; compose supplies env vars.
+.env
+
+# Runtime state — mounted as volumes instead.
+data/*.index
+uploads/*

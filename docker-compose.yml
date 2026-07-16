@@ -1,0 +1,104 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: km_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: knowledge_mgmt
+      MYSQL_USER: km_user
+      MYSQL_PASSWORD: km_pass
+    # utf8mb4 is not optional: PDF text routinely contains non-ASCII characters
+    # (smart quotes, dashes, accents) which raise OperationalError 1366 on the
+    # older utf8mb3 default.
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+    container_name: km_backend
+    restart: unless-stopped
+    environment:
+      # `mysql` is the compose service name — resolvable inside the network,
+      # unlike the localhost URL used when running on the host.
+      DATABASE_URL: mysql+pymysql://km_user:km_pass@mysql:3306/knowledge_mgmt
+      # Demo secret. A real deployment injects this from a secret store; it is
+      # hardcoded here so a reviewer can `docker compose up` with no setup.
+      JWT_SECRET_KEY: docker-demo-secret-not-for-production
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      # Measured by scripts/calibrate.py, not guessed. See README.
+      CHUNK_SIZE: 400
+      CHUNK_OVERLAP: 50
+      SIMILARITY_FLOOR: 0.2668
+      # ADR-007: the FAISS index is in-process. More than one worker means
+      # divergent indexes and silent search failures, so the app refuses to boot.
+      WEB_CONCURRENCY: 1
+    ports:
+      - "8000:8000"
+    volumes:
+      # The index is rebuildable from MySQL, but persisting it skips a rebuild
+      # on every restart.
+      - faiss_index:/app/data
+      - uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the bundle at build time. This is the URL the *browser*
+        # resolves, so it must be the published host port — not http://backend.
+        VITE_API_URL: http://localhost:8000/api/v1
+    container_name: km_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Throwaway database for the test suite. Tests must run against MySQL, not
+  # SQLite: SQLite cannot parse `detail->>'$.query'` (analytics), does not
+  # enforce ENUM, and has foreign keys off by default — so cascade and JSON
+  # tests would pass locally while proving nothing about production behaviour.
+  mysql_test:
+    image: mysql:8.4
+    container_name: km_mysql_test
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: knowledge_mgmt_test
+      MYSQL_USER: km_user
+      MYSQL_PASSWORD: km_pass
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3307:3306"
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  mysql_data:
+  faiss_index:
+  uploads:
