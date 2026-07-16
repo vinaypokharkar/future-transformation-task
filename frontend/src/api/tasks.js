@@ -26,8 +26,18 @@ export async function createTask(payload) {
   return data
 }
 
-/** Assignee or admin. */
-export async function updateTaskStatus(id, status) {
-  const { data } = await api.patch(`/tasks/${id}/status`, { status })
+/**
+ * Update one assignee's status.
+ *
+ * Status is per-assignee, so this always resolves to exactly one person.
+ * Omitting userId updates the caller's own. Passing one is admin-only — the
+ * server rejects it for everybody else, so this is convenience, not a
+ * permission check.
+ */
+export async function updateTaskStatus(id, status, userId) {
+  const { data } = await api.patch(
+    `/tasks/${id}/status`,
+    compact({ status, user_id: userId }),
+  )
   return data
 }

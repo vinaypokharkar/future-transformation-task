@@ -43,7 +43,10 @@ export default function TasksPage() {
   }
 
   const statusMutation = useMutation({
-    mutationFn: ({ task, status }) => updateTaskStatus(task.id, status),
+    // userId is omitted when you tick your own row, so the server updates the
+    // caller's assignment. An admin ticking someone else's sends it explicitly.
+    mutationFn: ({ task, assignee, status }) =>
+      updateTaskStatus(task.id, status, assignee.user_id === user.id ? undefined : assignee.user_id),
     onSuccess: invalidateTaskViews,
   })
 
@@ -123,13 +126,20 @@ export default function TasksPage() {
           <TaskTable
             tasks={tasks}
             currentUserId={user.id}
-            // Status is per-assignee, so the toggle only appears for the
-            // viewer's own row. An admin who is not on the task has nothing to
-            // toggle — my_status is null — and correcting someone else's status
-            // is an explicit action, not a button that silently targets them.
-            canToggle={(task) => task.my_status != null}
-            onToggleStatus={(task, status) => statusMutation.mutate({ task, status })}
-            togglingTaskId={statusMutation.isPending ? statusMutation.variables?.task.id : null}
+            // You may always tick your own row; an admin may tick anybody's.
+            // This mirrors the server rule rather than replacing it — a
+            // non-admin who forges the request still gets a 404.
+            canToggleAssignee={(_task, assignee) => isAdmin || assignee.user_id === user.id}
+            onToggleAssignee={(task, assignee, status) =>
+              statusMutation.mutate({ task, assignee, status })
+            }
+            // Keyed by task AND assignee: two people on one task each have
+            // their own control, and a task-level key would spin both.
+            togglingKey={
+              statusMutation.isPending
+                ? `${statusMutation.variables?.task.id}:${statusMutation.variables?.assignee.user_id}`
+                : null
+            }
           />
         )}
       </Card>
