@@ -27,6 +27,12 @@ def _assert_single_worker() -> None:
     across processes. Single-worker is the constraint that makes this design
     correct; scaling out means externalising the vector store.
     See ADR-007 in the README.
+
+    This check is only the early, friendly half: it reads the environment, which
+    is how compose configures workers, and fails with a clear message before any
+    expensive startup work. It cannot see `uvicorn --workers 4`, because the CLI
+    flag never touches the environment — the exclusive index lock in
+    core.process_lock is what actually enforces the constraint.
     """
     workers = os.getenv("WEB_CONCURRENCY") or os.getenv("UVICORN_WORKERS")
     if workers and workers.isdigit() and int(workers) > 1:
@@ -40,6 +46,15 @@ def _assert_single_worker() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _assert_single_worker()
+
+    # The real enforcement. Unlike the env check above, an OS-level lock is
+    # blind to *how* a second process arrived — uvicorn --workers, a stray
+    # second server, a script run against the live index. Taken before the model
+    # loads so a rejected worker fails in milliseconds rather than after
+    # several seconds of wasted startup.
+    from app.core import process_lock
+
+    process_lock.acquire(settings.faiss_index_path)
 
     # Load the embedding model once, at startup. On a cold machine the first
     # call downloads ~80MB from HuggingFace; doing that lazily inside a request
@@ -58,6 +73,7 @@ async def lifespan(app: FastAPI):
 
     store.persist()
     logger.info("Vector index persisted on shutdown")
+    process_lock.release()
 
 
 app = FastAPI(

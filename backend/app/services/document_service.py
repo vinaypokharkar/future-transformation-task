@@ -53,12 +53,21 @@ def upload(
     """
     file_type = _resolve_file_type(file.filename or "")
 
-    contents = file.file.read()
-    if len(contents) > settings.max_upload_bytes:
+    # Check the declared size BEFORE reading. Reading first and measuring after
+    # makes the limit decorative: a multi-GB upload would exhaust memory long
+    # before the check it was supposed to fail.
+    if file.size is not None and file.size > settings.max_upload_bytes:
         raise ValidationError(
             f"File exceeds {settings.max_upload_mb}MB limit "
-            f"({len(contents) / 1024 / 1024:.1f}MB)"
+            f"({file.size / 1024 / 1024:.1f}MB)"
         )
+
+    contents = file.file.read(settings.max_upload_bytes + 1)
+    # file.size is client-supplied via Content-Length, so re-check what actually
+    # arrived. Reading one byte past the limit is what makes an over-sized body
+    # detectable without holding all of it.
+    if len(contents) > settings.max_upload_bytes:
+        raise ValidationError(f"File exceeds {settings.max_upload_mb}MB limit")
     if not contents:
         raise ValidationError("File is empty")
 
@@ -84,13 +93,11 @@ def upload(
     try:
         _index_document(db, document, storage_path, file_type)
     except ValidationError:
-        document.status = DocumentStatus.FAILED
-        db.commit()
+        _mark_failed(db, document)
         raise
     except Exception:
         logger.exception("Indexing failed for document %s", document.id)
-        document.status = DocumentStatus.FAILED
-        db.commit()
+        _mark_failed(db, document)
         raise ValidationError("Failed to index document")
 
     activity_service.log(
@@ -107,6 +114,25 @@ def upload(
         ip_address=ip_address,
     )
     return document
+
+
+def _mark_failed(db: Session, document: Document) -> None:
+    """Mark a document failed, discarding anything the failed attempt staged.
+
+    The rollback is the load-bearing part. _index_document flushes chunk rows to
+    obtain the primary keys FAISS uses as vector IDs, so by the time embedding
+    runs there are pending INSERTs in the transaction. Committing the FAILED
+    status without rolling back first would commit those chunks too: rows in
+    MySQL with no vectors in FAISS, on a document reporting chunk_count=0.
+
+    That breaks ntotal == COUNT(document_chunks) permanently — /health would
+    report index_consistent: false forever, and reindex would embed chunks
+    belonging to a document that never successfully indexed.
+    """
+    db.rollback()
+    document.status = DocumentStatus.FAILED
+    document.chunk_count = 0
+    db.commit()
 
 
 def _index_document(
@@ -174,12 +200,16 @@ def get_document(db: Session, document_id: int) -> Document:
 def delete_document(db: Session, document_id: int) -> None:
     """Delete a document, its chunks (FK cascade), and its vectors.
 
-    Vector IDs are collected before the delete, because afterwards the chunk
-    rows are gone and there is no way to know which vectors to remove — that is
-    exactly how an index accumulates orphans that still match searches.
+    Vector IDs and the storage path are both read before the delete. The IDs
+    because afterwards the chunk rows are gone and there is no way to know which
+    vectors to remove — exactly how an index accumulates orphans that still
+    match searches. The path because reading an attribute off an instance the
+    session has already deleted relies on detached-object semantics rather than
+    on anything guaranteed.
     """
     document = get_document(db, document_id)
     chunk_ids = document_repo.get_chunk_ids_for_document(db, document_id)
+    storage_path = Path(document.storage_path)
 
     document_repo.delete(db, document)
 
@@ -195,6 +225,5 @@ def delete_document(db: Session, document_id: int) -> None:
             store.ntotal,
         )
 
-    path = Path(document.storage_path)
-    if path.exists():
-        path.unlink()
+    if storage_path.exists():
+        storage_path.unlink()

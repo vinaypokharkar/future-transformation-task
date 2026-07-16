@@ -1,5 +1,5 @@
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.document import Document, DocumentChunk
 from app.schemas.document import DocumentFilters
@@ -42,9 +42,20 @@ def add_chunks(db: Session, chunks: list[DocumentChunk]) -> list[DocumentChunk]:
 
 
 def get_chunks_by_ids(db: Session, chunk_ids: list[int]) -> list[DocumentChunk]:
+    """Load chunks with their parent document eagerly.
+
+    joinedload is not decoration: every search result renders its document
+    title, so a lazy relationship issues one extra SELECT per hit. At k=5 that
+    turns a single search into six queries — the classic N+1, on the hottest
+    path in the app.
+    """
     if not chunk_ids:
         return []
-    stmt = select(DocumentChunk).where(DocumentChunk.id.in_(chunk_ids))
+    stmt = (
+        select(DocumentChunk)
+        .where(DocumentChunk.id.in_(chunk_ids))
+        .options(joinedload(DocumentChunk.document))
+    )
     return list(db.scalars(stmt))
 
 

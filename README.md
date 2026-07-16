@@ -499,7 +499,7 @@ The conventional pairing for this stack is `passlib[bcrypt]` + `python-jose`. Bo
 
 **Result:** two fewer transitive dependencies and no known CVEs.
 
-### ADR-007 — Single-worker serving
+### ADR-007 — Single-worker serving, enforced by an OS lock
 
 The FAISS index lives in process memory. Under N workers there are N divergent indexes: an
 upload mutates worker A's copy, a search routed to worker B finds nothing, and every worker
@@ -507,7 +507,23 @@ races writes to the same index file. **Every response is still 200** — complet
 `threading.Lock` in `vector_store` guards threads within one process and does nothing across
 processes.
 
-So the app **refuses to boot** with `WEB_CONCURRENCY > 1` rather than failing quietly.
+Enforcement is two-layered, and the second layer exists because the first was not enough:
+
+1. **An environment check** (`WEB_CONCURRENCY`) fails fast with a clear message. This is how
+   compose configures workers.
+2. **An exclusive OS-level file lock** on the index (`app/core/process_lock.py`) is what
+   actually guarantees it.
+
+The env check alone was a **false guarantee**, and testing it proved so: `uvicorn --workers 4`
+never touches the environment, so the guard passed and four workers booted happily — the exact
+command the docs warn against. An OS lock has no blind spot. It does not care how the second
+process arrived (uvicorn workers, a stray second server, a script run against a live index), and
+the kernel releases it when the holder dies, so a crash cannot strand it the way a PID file
+would. Verified with `--workers 4`: exactly one process acquires the index, the rest are
+rejected.
+
+The lock is keyed to the index filename rather than its directory, so the test suite
+(`data/test_faiss.index`) and the dev server (`data/faiss.index`) do not collide.
 
 **This is where the design stops scaling, and it's stated rather than discovered.** The real fix
 is externalising the vector store (Chroma in server mode, Qdrant), which is a whole extra service
