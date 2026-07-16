@@ -17,6 +17,12 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("FAISS_INDEX_PATH", "data/test_faiss.index")
+# JWT_SECRET_KEY has no default and is validated, so the suite must supply one
+# before app.core.config is imported. setdefault, not assignment: a real .env
+# still wins. This value only ever signs tokens inside the test process.
+os.environ.setdefault(
+    "JWT_SECRET_KEY", "test-only-secret-not-used-outside-pytest-0123456789abcdef"
+)
 
 from app.core.config import settings  # noqa: E402
 from app.core.deps import get_db  # noqa: E402

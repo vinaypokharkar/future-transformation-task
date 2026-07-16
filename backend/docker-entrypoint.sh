@@ -5,6 +5,28 @@
 # and an accepting connection are not the same instant, so we still poll.
 set -euo pipefail
 
+# Generate a signing secret on first boot rather than shipping one.
+#
+# A hardcoded secret in docker-compose.yml is public the moment the repo is:
+# anyone who can read it can forge an admin token against any deployment that
+# kept the default. But the reviewer must still get a working stack from
+# `docker compose up` with zero setup, so the secret is generated here and
+# persisted to the data volume — random per deployment, and stable across
+# restarts so existing tokens survive.
+SECRET_FILE=/app/data/.jwt_secret
+if [ -z "${JWT_SECRET_KEY:-}" ]; then
+    if [ ! -f "$SECRET_FILE" ]; then
+        mkdir -p "$(dirname "$SECRET_FILE")"
+        python -c "import secrets; print(secrets.token_urlsafe(32))" > "$SECRET_FILE"
+        chmod 600 "$SECRET_FILE"
+        echo "[entrypoint] generated a new JWT secret (persisted to the data volume)"
+    else
+        echo "[entrypoint] reusing the JWT secret from the data volume"
+    fi
+    JWT_SECRET_KEY="$(cat "$SECRET_FILE")"
+    export JWT_SECRET_KEY
+fi
+
 echo "[entrypoint] waiting for MySQL..."
 for i in {1..30}; do
     if python -c "

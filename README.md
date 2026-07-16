@@ -562,6 +562,13 @@ and out of scope for an MVP.
 - **Defence in depth.** `require_role` gates the route; the service independently re-checks
   ownership. A role gate cannot answer "is this *your* task?".
 - **`/users` is admin-only.** A full roster is exactly what credential stuffing wants.
+- **`JWT_SECRET_KEY` is required, validated, and never committed.** It has no default: the app
+  refuses to start on a missing, short (<32 char), or placeholder secret — including the one in
+  `.env.example`, which is what you'd get by following the README's own happy path. A weak
+  signing key isn't a degraded state, it's a total auth bypass: anyone who knows it mints admin
+  tokens at will, and nothing about the running app looks wrong. Docker generates a random
+  secret on first boot and persists it to the data volume — random per deployment, stable across
+  restarts, and still zero-setup.
 
 ---
 

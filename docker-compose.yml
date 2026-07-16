@@ -34,9 +34,12 @@ services:
       # `mysql` is the compose service name — resolvable inside the network,
       # unlike the localhost URL used when running on the host.
       DATABASE_URL: mysql+pymysql://km_user:km_pass@mysql:3306/knowledge_mgmt
-      # Demo secret. A real deployment injects this from a secret store; it is
-      # hardcoded here so a reviewer can `docker compose up` with no setup.
-      JWT_SECRET_KEY: docker-demo-secret-not-for-production
+      # JWT_SECRET_KEY is deliberately NOT set here. A secret committed to the
+      # repo is public knowledge, and any deployment keeping the default would
+      # accept forged admin tokens. The entrypoint generates one on first boot
+      # and persists it to the data volume: random per deployment, stable across
+      # restarts, and `docker compose up` still needs no setup.
+      # To pin your own: JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set it in a .env file}
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
       # Measured by scripts/calibrate.py, not guessed. See README.
       CHUNK_SIZE: 400

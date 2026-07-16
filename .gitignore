@@ -40,6 +40,7 @@ PLAN.md
 .DS_Store
 Thumbs.db
 .gstack/
+.serena/
 
 # Index ownership lock (see app/core/process_lock.py)
 backend/data/*.lock

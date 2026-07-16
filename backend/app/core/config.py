@@ -1,6 +1,25 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Values that ship in this repo or are obvious stand-ins. Anything here is
+# public knowledge, so a token signed with one can be forged by anybody who has
+# read the source.
+_PLACEHOLDER_SECRETS = {
+    "change-me",
+    "changeme",
+    "change-me-in-production-use-a-real-random-secret",
+    "docker-demo-secret-not-for-production",
+    "secret",
+    "supersecret",
+    "your-secret-key",
+    "test",
+}
+
+# HS256 keys shorter than the hash output add no security over a 256-bit key and
+# are usually a sign someone typed a word rather than generating one.
+_MIN_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -16,7 +35,11 @@ class Settings(BaseSettings):
         "mysql+pymysql://km_user:km_pass@localhost:3307/knowledge_mgmt_test"
     )
 
-    jwt_secret_key: str = "change-me"
+    # No default, deliberately. A working-but-weak default is the worst option
+    # available: the app boots, every test passes, and every token is forgeable
+    # by anyone who has read this file. Missing config should stop the process,
+    # not silently downgrade its security.
+    jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
@@ -50,6 +73,34 @@ class Settings(BaseSettings):
     seed_admin_email: str = "admin@example.com"
     seed_admin_password: str = "Admin@123"
     seed_user_password: str = "User@123"
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def _reject_weak_secret(cls, v: str) -> str:
+        """Refuse to start on a secret that anyone reading the repo would know.
+
+        The placeholder in .env.example is caught here on purpose. Copying that
+        file is step one of the README, so without this check the documented
+        happy path hands you a publicly-known signing key — and nothing about
+        the running app would look wrong.
+        """
+        hint = (
+            'Generate one with:\n'
+            '  python -c "import secrets; print(secrets.token_urlsafe(32))"\n'
+            "then set JWT_SECRET_KEY in backend/.env"
+        )
+
+        if v.strip().lower() in _PLACEHOLDER_SECRETS:
+            raise ValueError(
+                f"JWT_SECRET_KEY is set to the placeholder {v!r}, which is public "
+                f"in this repository — anyone could forge an admin token.\n{hint}"
+            )
+        if len(v) < _MIN_SECRET_LENGTH:
+            raise ValueError(
+                f"JWT_SECRET_KEY is {len(v)} characters; HS256 needs at least "
+                f"{_MIN_SECRET_LENGTH}.\n{hint}"
+            )
+        return v
 
     @property
     def cors_origin_list(self) -> list[str]:
