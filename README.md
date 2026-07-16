@@ -46,6 +46,12 @@ queries" is a MySQL JSON-path aggregation over `activity_logs.detail`, not a har
 
 ![Tasks](docs/screenshots/02-tasks-filtered.png)
 
+**Assigning one task to several people.** The dropdown opens to a checkbox per user; each
+assignee then completes the task independently, so the row above reads `Pending · 1 of 2 done`
+until everybody is finished.
+
+![Assigning to multiple users](docs/screenshots/06-multi-assign-dropdown.png)
+
 **Documents** — upload, chunk count, and index status.
 
 ![Documents](docs/screenshots/03-documents.png)

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import Button from './Button'
+import MultiSelectField from './MultiSelectField'
 import { SelectField, TextAreaField, TextField } from './Field'
 
 const EMPTY_FORM = { title: '', description: '', document_id: '', due_date: '' }
@@ -9,14 +10,9 @@ const EMPTY_FORM = { title: '', description: '', document_id: '', due_date: '' }
  */
 export default function CreateTaskForm({ users = [], documents = [], onSubmit, onCancel, isSubmitting, error }) {
   const [form, setForm] = useState(EMPTY_FORM)
-  // Checkboxes rather than a multi-select: a <select multiple> hides the fact
-  // that more than one person can be picked, and requires ctrl-click to use.
   const [assigneeIds, setAssigneeIds] = useState([])
 
   const setField = (name) => (event) => setForm((prev) => ({ ...prev, [name]: event.target.value }))
-
-  const toggleAssignee = (id) =>
-    setAssigneeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
   const handleSubmit = (event) => {
     event.preventDefault()
@@ -50,32 +46,20 @@ export default function CreateTaskForm({ users = [], documents = [], onSubmit, o
         placeholder="What needs doing, and what does done look like?"
       />
 
-      <fieldset>
-        <legend className="mb-1.5 block text-sm font-medium text-slate-700">
-          Assign to{' '}
-          <span className="font-normal text-slate-500">
-            ({assigneeIds.length} selected — each person completes it separately)
-          </span>
-        </legend>
-        <div className="max-h-44 space-y-1 overflow-y-auto rounded-md border border-slate-200 p-2">
-          {users.length === 0 && <p className="px-1 py-2 text-sm text-slate-500">No users available.</p>}
-          {users.map((user) => (
-            <label
-              key={user.id}
-              className="flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 text-sm hover:bg-slate-50"
-            >
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                checked={assigneeIds.includes(user.id)}
-                onChange={() => toggleAssignee(user.id)}
-              />
-              <span className="text-slate-900">{user.full_name || user.email}</span>
-              <span className="text-xs capitalize text-slate-400">{user.role}</span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <MultiSelectField
+        id="task-assignees"
+        label="Assign to"
+        hint="(each person completes it separately)"
+        placeholder="Select users…"
+        emptyMessage="No users available."
+        options={users.map((user) => ({
+          value: user.id,
+          label: user.full_name || user.email,
+          meta: user.role,
+        }))}
+        value={assigneeIds}
+        onChange={setAssigneeIds}
+      />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <SelectField
