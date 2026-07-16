@@ -24,12 +24,9 @@ class User(Base):
 
     role: Mapped["Role"] = relationship(back_populates="users", lazy="joined")
 
-    # `tasks` has two foreign keys to `users` (assigned_to and created_by), so
-    # SQLAlchemy cannot infer which one each relationship follows and raises
-    # AmbiguousForeignKeysError. Both sides must name the column explicitly.
-    assigned_tasks: Mapped[list["Task"]] = relationship(
-        back_populates="assignee", foreign_keys="Task.assigned_to"
-    )
+    # Assignment is many-to-many via task_assignments, so a user reaches their
+    # tasks through that table rather than a foreign key on tasks.
+    assignments: Mapped[list["TaskAssignment"]] = relationship(back_populates="user")
     created_tasks: Mapped[list["Task"]] = relationship(
         back_populates="creator", foreign_keys="Task.created_by"
     )

@@ -235,8 +235,9 @@ backend/scripts/  seed, reindex, calibrate, sweep_chunking, make_sample_pdf
 erDiagram
     roles ||--o{ users : "has"
     users ||--o{ documents : "uploads"
-    users ||--o{ tasks : "assigned (RESTRICT)"
     users ||--o{ tasks : "created (RESTRICT)"
+    users ||--o{ task_assignments : "assigned (RESTRICT)"
+    tasks ||--o{ task_assignments : "CASCADE"
     users ||--o{ activity_logs : "performs (SET NULL)"
     documents ||--o{ document_chunks : "CASCADE"
     documents ||--o{ tasks : "referenced (SET NULL)"
@@ -245,15 +246,24 @@ erDiagram
     users { int id PK "email UK, hashed_password, role_id FK" }
     documents { int id PK "title, file_type, status, chunk_count, uploaded_by FK" }
     document_chunks { bigint id PK "= FAISS vector ID; document_id FK, chunk_index, content" }
-    tasks { int id PK "status, assigned_to FK, created_by FK, document_id FK" }
+    tasks { int id PK "title, created_by FK, document_id FK - no status, no assignee" }
+    task_assignments { int id PK "task_id FK, user_id FK, status - UNIQUE(task_id,user_id)" }
     activity_logs { bigint id PK "action, detail JSON, user_id FK" }
 ```
+
+**A task can be assigned to many users, and each tracks their own status.** That is why neither
+`assigned_to` nor `status` lives on `tasks`: a task assigned to three people has three
+independent states. `task_assignments` is not a bare join table — it carries `status`, because
+the entire point of assigning work to three people is that each completes it separately. Alice
+finishing does not finish it for Bob. See [ADR-008](#adr-008--per-assignee-status-on-a-join-table).
 
 Normalized to 3NF. Every relation is a real foreign key with a deliberate delete rule:
 
 | Relation | Rule | Reasoning |
 |---|---|---|
 | `document_chunks` → `documents` | **CASCADE** | Chunks are meaningless without their document |
+| `task_assignments` → `tasks` | **CASCADE** | An assignment to a deleted task is meaningless |
+| `task_assignments` → `users` | **RESTRICT** | Deleting a user must not erase what they were responsible for |
 | `tasks` → `users` | **RESTRICT** | Deleting a user must never silently orphan task history |
 | `activity_logs` → `users` | **SET NULL** | The audit trail must outlive the user it describes |
 | `users` → `roles` | **RESTRICT** | A role can't vanish while users reference it |
@@ -261,20 +271,12 @@ Normalized to 3NF. Every relation is a real foreign key with a deliberate delete
 That asymmetry between `tasks` (RESTRICT) and `activity_logs` (SET NULL) is intentional: task
 records need an owner to make sense; audit records need to survive regardless.
 
-**`tasks` carries two foreign keys to `users`** (`assigned_to`, `created_by`). SQLAlchemy cannot
-infer which relationship follows which column and raises `AmbiguousForeignKeysError` unless both
-sides declare `foreign_keys=` explicitly.
+`task_assignments` carries a **`UNIQUE(task_id, user_id)`** constraint: assigning the same person
+twice is meaningless and would double-count them in every analytic. Enforced by the database
+rather than by hoping the service always de-duplicates.
 
-Verified against the live database:
-
-```
-tasks_ibfk_1  assigned_to  → users.id     document_chunks → documents  CASCADE
-tasks_ibfk_2  created_by   → users.id     tasks           → users      RESTRICT
-tasks_ibfk_3  document_id  → documents.id activity_logs   → users      SET NULL
-```
-
-**Indexes** are placed where the API actually reads: `(assigned_to, status)` on `tasks` backs
-the filtering endpoint; `(action, created_at)` on `activity_logs` backs the analytics
+**Indexes** are placed where the API actually reads: `(user_id, status)` on `task_assignments`
+backs the filtering endpoint; `(action, created_at)` on `activity_logs` backs the analytics
 aggregations.
 
 ---
@@ -364,9 +366,9 @@ Base: `/api/v1`. Errors: `{"detail": "..."}`.
 | POST | `/documents` | **admin** | Multipart; extract → chunk → embed → index; logs `document_upload` |
 | GET | `/documents` | any | Filters: `?file_type=&status=&uploaded_by=` |
 | DELETE | `/documents/{id}` | **admin** | Cascades chunks **and** removes vectors |
-| POST | `/tasks` | **admin** | Create and assign |
+| POST | `/tasks` | **admin** | Create and assign to one or many users (`assignee_ids: [1,2]`) |
 | GET | `/tasks` | any | **Dynamic filtering** — see below |
-| PATCH | `/tasks/{id}/status` | assignee or admin | `pending` ↔ `completed`; logs `task_update` |
+| PATCH | `/tasks/{id}/status` | assignee or admin | Updates the **caller's own** assignment. Admins may pass `user_id` to update another's. Logs `task_update` |
 | POST | `/search` | any | Semantic search; logs `search` |
 | GET | `/analytics` | **admin** | Live counts + top queries |
 | GET | `/health` | public | Includes the index-consistency invariant |
@@ -551,6 +553,39 @@ and out of scope for an MVP.
 - **Healthchecks use `127.0.0.1`, not `localhost`.** nginx binds `0.0.0.0` (IPv4), while
   `localhost` resolves to `[::1]` first inside the container — so a perfectly healthy container
   reports `Connection refused` forever.
+
+### ADR-008 — Per-assignee status on a join table
+
+**Decision:** a task can be assigned to many users, and each assignee owns their own
+Pending/Completed. `tasks` holds no `assigned_to` and no `status`; both live on
+`task_assignments`. The task-level status is **derived**: completed only when every assignee is
+done.
+
+**Drivers:** "Everyone must read the security policy" is the normal case, and it only works if
+Alice finishing does not finish it for Bob. Per-person status is also the only way to answer *who
+actually did the work*.
+
+**Alternatives:** *A single shared status on `tasks`* — simpler, and right for "someone fix the
+printer", but it destroys accountability: whoever clicks first marks it done for everyone.
+*Storing a rollup column on `tasks`* — rejected. A stored rollup is a second source of truth and
+drifts the first time an assignment changes without it; deriving it costs one EXISTS subquery.
+
+**Consequences worth knowing:**
+
+- **Filtering needs EXISTS, not JOIN.** A join against a many-to-many table multiplies rows: a
+  task with three assignees returns three times, and `LIMIT` then counts duplicates rather than
+  tasks — silently short-paging. There's a test for exactly this.
+- **`?status=` means two different things, correctly.** Scoped to a user
+  (`?status=completed&assigned_to=2`), it means *the tasks Alice finished*, including a shared
+  task Bob hasn't. Unscoped, it means *fully finished tasks*. Without the scoped case, a user
+  filtering their completed work would see nothing until every colleague also finished.
+- **Analytics reports both units.** A task assigned to three people with two done is *0 tasks
+  completed* but *2 assignments completed*. Both are true and neither substitutes for the other,
+  so `/analytics` returns `tasks` (rollup) and `assignments` (per-person) separately.
+- **The migration carries data.** Dropping `assigned_to`/`status` without copying first would
+  leave a correct schema and no assignments. Each existing task became exactly one assignment
+  with its old status; the downgrade collapses back to the lowest user ID and marks the task
+  completed only if everyone was done. Verified in both directions on real rows.
 
 ### Security decisions worth naming
 

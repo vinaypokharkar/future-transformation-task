@@ -32,7 +32,7 @@ from app.main import app  # noqa: E402
 from app.models.activity_log import ActivityLog  # noqa: E402
 from app.models.document import Document, DocumentChunk, DocumentStatus, FileType  # noqa: E402
 from app.models.role import Role, RoleName  # noqa: E402
-from app.models.task import Task, TaskStatus  # noqa: E402
+from app.models.task import Task, TaskAssignment, TaskStatus  # noqa: E402
 from app.models.user import User  # noqa: E402
 
 engine = create_engine(settings.test_database_url, pool_pre_ping=True)
@@ -66,7 +66,7 @@ def db():
     away — and those rows then leak into the next test's log assertions.
     """
     with TestSession() as session:
-        for model in (ActivityLog, DocumentChunk, Task, Document, User, Role):
+        for model in (ActivityLog, DocumentChunk, TaskAssignment, Task, Document, User, Role):
             session.query(model).delete()
         session.commit()
         yield session
@@ -139,10 +139,24 @@ def alice_headers(client, alice):
 
 @pytest.fixture
 def make_task(db):
-    def _make(*, assigned_to, created_by, title="Task", status=TaskStatus.PENDING):
-        t = Task(
-            title=title, status=status, assigned_to=assigned_to, created_by=created_by
-        )
+    """Create a task with one or many assignees.
+
+    `assigned_to` accepts a single user id or a list, so single-assignee tests
+    read the same as they did before the many-to-many change. `status` applies
+    to every assignee unless `statuses` names them individually.
+    """
+
+    def _make(*, assigned_to, created_by, title="Task", status=TaskStatus.PENDING, statuses=None):
+        user_ids = assigned_to if isinstance(assigned_to, (list, tuple)) else [assigned_to]
+
+        t = Task(title=title, created_by=created_by)
+        t.assignments = [
+            TaskAssignment(
+                user_id=uid,
+                status=(statuses.get(uid, status) if statuses else status),
+            )
+            for uid in user_ids
+        ]
         db.add(t)
         db.commit()
         db.refresh(t)

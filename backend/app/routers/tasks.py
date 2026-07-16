@@ -17,7 +17,7 @@ def create_task(
     task = task_service.create_task(
         db, payload=payload, creator=admin, ip_address=get_client_ip(request)
     )
-    return TaskOut.model_validate(task)
+    return TaskOut.from_task(task, admin.id)
 
 
 @router.get("", response_model=list[TaskOut])
@@ -45,13 +45,13 @@ def list_tasks(
         offset=offset,
     )
     tasks = task_service.list_tasks(db, filters=filters, user=current_user)
-    return [TaskOut.model_validate(t) for t in tasks]
+    return [TaskOut.from_task(t, current_user.id) for t in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskOut)
 def get_task(task_id: int, db: DbSession, current_user: CurrentUser) -> TaskOut:
     task = task_service.get_task(db, task_id=task_id, user=current_user)
-    return TaskOut.model_validate(task)
+    return TaskOut.from_task(task, current_user.id)
 
 
 @router.patch("/{task_id}/status", response_model=TaskOut)
@@ -62,11 +62,18 @@ def update_task_status(
     db: DbSession,
     current_user: CurrentUser,
 ) -> TaskOut:
+    """Update an assignee's status.
+
+    Status is per-assignee, so this changes the caller's own by default. An
+    admin may pass user_id to update someone else's — the only way an admin who
+    is not on the task can correct it.
+    """
     task = task_service.update_status(
         db,
         task_id=task_id,
         new_status=payload.status,
         user=current_user,
+        target_user_id=payload.user_id,
         ip_address=get_client_ip(request),
     )
-    return TaskOut.model_validate(task)
+    return TaskOut.from_task(task, current_user.id)

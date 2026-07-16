@@ -14,7 +14,7 @@ import { getErrorMessage } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { useAuth } from '../auth/AuthContext'
 import { useDocumentsQuery } from '../hooks/useDocuments'
-import { toUsersById, useUsersQuery } from '../hooks/useUsers'
+import { useUsersQuery } from '../hooks/useUsers'
 
 const NO_FILTERS = { status: '', assigned_to: '' }
 
@@ -35,10 +35,6 @@ export default function TasksPage() {
   const usersQuery = useUsersQuery({ enabled: isAdmin })
   // Only the admin create-task modal needs documents; regular users never see it.
   const documentsQuery = useDocumentsQuery({}, { enabled: isAdmin })
-
-  // Regular users only ever see their own tasks (the server force-scopes them),
-  // so their own identity is the only lookup entry needed.
-  const usersById = isAdmin ? toUsersById(usersQuery.data) : { [user.id]: user }
 
   const invalidateTaskViews = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.allTasks() })
@@ -126,8 +122,12 @@ export default function TasksPage() {
         ) : (
           <TaskTable
             tasks={tasks}
-            usersById={usersById}
-            canToggle={(task) => isAdmin || task.assigned_to === user.id}
+            currentUserId={user.id}
+            // Status is per-assignee, so the toggle only appears for the
+            // viewer's own row. An admin who is not on the task has nothing to
+            // toggle — my_status is null — and correcting someone else's status
+            // is an explicit action, not a button that silently targets them.
+            canToggle={(task) => task.my_status != null}
             onToggleStatus={(task, status) => statusMutation.mutate({ task, status })}
             togglingTaskId={statusMutation.isPending ? statusMutation.variables?.task.id : null}
           />

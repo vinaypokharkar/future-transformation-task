@@ -8,7 +8,7 @@ generated migration — producing an empty revision that looks like it worked.
 from app.models.activity_log import ActivityAction, ActivityLog
 from app.models.document import Document, DocumentChunk, DocumentStatus, FileType
 from app.models.role import Role, RoleName
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskAssignment, TaskStatus
 from app.models.user import User
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "Role",
     "RoleName",
     "Task",
+    "TaskAssignment",
     "TaskStatus",
     "User",
 ]
