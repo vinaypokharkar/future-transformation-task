@@ -26,6 +26,7 @@ dist/
 server.log
 server.err
 vite.log
+*.stackdump
 
 # Working documents — not part of the deliverable
 SPEC.md
