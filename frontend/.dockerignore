@@ -1,0 +1,6 @@
+# Host node_modules are platform-specific; `npm ci` rebuilds them in the image.
+node_modules/
+dist/
+.vite/
+.env
+*.log
