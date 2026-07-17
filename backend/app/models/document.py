@@ -86,7 +86,15 @@ class DocumentChunk(Base):
 
     document: Mapped["Document"] = relationship(back_populates="chunks")
 
-    __table_args__ = (Index("ix_chunk_document_order", "document_id", "chunk_index"),)
+    __table_args__ = (
+        Index("ix_chunk_document_order", "document_id", "chunk_index"),
+        # Backs the lexical half of hybrid retrieval. Embeddings cannot find a
+        # rare proper noun — MiniLM has never seen the token, so it embeds the
+        # nearest everyday word instead and the real chunk scores below the
+        # floor. A FULLTEXT index answers "is this string actually here?", which
+        # is the one question cosine similarity cannot. See ADR-009.
+        Index("ix_chunk_content_fulltext", "content", mysql_prefix="FULLTEXT"),
+    )
 
     def __repr__(self) -> str:
         return f"<DocumentChunk doc={self.document_id} #{self.chunk_index}>"

@@ -102,6 +102,44 @@ class VectorStore:
             results.append((int(chunk_id), float(score)))
         return results
 
+    def similarity_for(
+        self, chunk_ids: list[int], query_vector: np.ndarray
+    ) -> dict[int, float]:
+        """Cosine similarity for specific chunk IDs, not a nearest-neighbour search.
+
+        Hybrid retrieval needs this: a chunk found lexically has no cosine yet,
+        and the API must report one comparable number rather than two scores on
+        unrelated scales. Reconstructing the stored vector and taking its inner
+        product against the query gives exactly the score the semantic path
+        would have produced, so both halves of the result set are measured the
+        same way.
+
+        This is what IndexIDMap2 buys over IndexIDMap — a reverse map making
+        reconstruct(id) efficient. Re-embedding the chunk text would return the
+        same number at roughly a thousand times the cost.
+
+        A missing ID means the index has drifted from MySQL. It is skipped
+        rather than raised: /health reports the same drift and reindex.py
+        repairs it, and a stale vector must not take down a live search.
+        """
+        if not chunk_ids or self.ntotal == 0:
+            return {}
+
+        query = np.asarray(query_vector, dtype=np.float32).reshape(-1)
+        scores: dict[int, float] = {}
+        with self._lock:
+            for chunk_id in chunk_ids:
+                try:
+                    vector = self._index.reconstruct(int(chunk_id))
+                except RuntimeError:
+                    logger.warning(
+                        "Chunk %s has no vector; index is stale. Run scripts/reindex.py",
+                        chunk_id,
+                    )
+                    continue
+                scores[int(chunk_id)] = float(np.dot(vector, query))
+        return scores
+
     def remove(self, chunk_ids: list[int]) -> int:
         if not chunk_ids:
             return 0

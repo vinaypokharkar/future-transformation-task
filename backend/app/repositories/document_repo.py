@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.document import Document, DocumentChunk
@@ -57,6 +57,42 @@ def get_chunks_by_ids(db: Session, chunk_ids: list[int]) -> list[DocumentChunk]:
         .options(joinedload(DocumentChunk.document))
     )
     return list(db.scalars(stmt))
+
+
+def lexical_search(db: Session, query: str, k: int) -> list[tuple[int, float]]:
+    """Return [(chunk_id, relevance)] for chunks literally containing the terms.
+
+    The lexical half of hybrid retrieval, backed by the FULLTEXT index on
+    content. This exists because embeddings are blind to rare proper nouns: a
+    token the model never saw in training has no vector of its own, so it embeds
+    as the nearest everyday word and the chunk that actually contains it scores
+    below the floor. See ADR-009.
+
+    NATURAL LANGUAGE MODE rather than BOOLEAN MODE: boolean mode would make
+    punctuation in a user's query (+, -, *, ") operators rather than text, so
+    an innocent question could silently become a different search. Natural
+    language mode treats the whole string as terms and ranks by relevance.
+
+    Relevance here is MySQL's own score, on an unbounded scale that has nothing
+    to do with cosine. The two are never compared or added — the caller re-scores
+    every lexical hit as a cosine so one comparable number reaches the API.
+
+    Parameterised, so a query string is data and never SQL.
+    """
+    if not query.strip():
+        return []
+
+    stmt = text(
+        """
+        SELECT id, MATCH(content) AGAINST (:q IN NATURAL LANGUAGE MODE) AS relevance
+        FROM document_chunks
+        WHERE MATCH(content) AGAINST (:q IN NATURAL LANGUAGE MODE)
+        ORDER BY relevance DESC
+        LIMIT :k
+        """
+    )
+    rows = db.execute(stmt, {"q": query, "k": k}).all()
+    return [(int(row.id), float(row.relevance)) for row in rows]
 
 
 def get_chunk_ids_for_document(db: Session, document_id: int) -> list[int]:

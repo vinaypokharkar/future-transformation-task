@@ -71,6 +71,7 @@ Login.
 | Auth | PyJWT + pwdlib[bcrypt] | Not `python-jose`/`passlib` — see [ADR-006](#adr-006--pyjwt--pwdlib-not-python-jose--passlib) |
 | Embeddings | sentence-transformers `all-MiniLM-L6-v2` | Local, 384-dim, no API key — see [ADR-001](#adr-001--local-embeddings-not-an-embedding-api) |
 | Vector index | FAISS `IndexFlatIP` + `IndexIDMap2` | Exact cosine search — see [ADR-002](#adr-002--faiss-and-mysql-as-source-of-truth) |
+| Lexical index | MySQL `FULLTEXT` | The other half of hybrid retrieval — see [ADR-009](#adr-009--hybrid-retrieval-semantic--lexical) |
 | PDF extraction | pypdf | Text-based PDFs; OCR out of scope |
 | Server state | TanStack Query | No Redux — see [ADR-005](#adr-005--tanstack-query-no-redux) |
 | Containers | Docker Compose | Whole stack in one command |
@@ -297,9 +298,17 @@ aggregations.
 upload → extract (pypdf / utf-8) → chunk (400 chars, 50 overlap)
        → embed (MiniLM, L2-normalized) → MySQL commit → FAISS add → status=indexed
 
-query  → embed → FAISS inner product (= cosine) → drop below floor
-       → hydrate chunks from MySQL → ranked results
+query ─┬─ embed → FAISS inner product (= cosine) → drop below floor ──┐
+       │                                                             ├─ union → rank by cosine
+       └─ MySQL FULLTEXT MATCH → chunks containing the terms ────────┘
 ```
+
+Retrieval is **hybrid**: a semantic half and a lexical half, because they fail in opposite
+directions. The semantic half finds paraphrases and is what the AI requirement asks for. The
+lexical half exists because embeddings are blind to rare proper nouns — see
+[ADR-009](#adr-009--hybrid-retrieval-semantic--lexical). A result is admitted if it's
+semantically close *or* lexically present, and everything is then scored as a cosine so one
+comparable number reaches the API.
 
 Vectors are L2-normalized, so FAISS's inner product is cosine similarity. Every score is a
 cosine in `[-1, 1]`, comparable across queries.
@@ -380,7 +389,7 @@ Base path is `/api/v1`. Errors return `{"detail": "..."}`.
 | POST | `/tasks` | admin | Create and assign to one or many users (`assignee_ids: [1,2]`) |
 | GET | `/tasks` | any | Dynamic filtering — see below |
 | PATCH | `/tasks/{id}/status` | assignee or admin | Updates the caller's own assignment. Admins may pass `user_id` to update another's. Logs `task_update` |
-| POST | `/search` | any | Semantic search; logs `search` |
+| POST | `/search` | any | Hybrid search (semantic + lexical); logs `search` |
 | GET | `/analytics` | admin | Live counts and top queries |
 | GET | `/health` | public | Includes the index-consistency invariant |
 
@@ -428,10 +437,10 @@ cd backend && .venv\Scripts\Activate.ps1
 pytest -v
 ```
 
-55 tests, all passing. They run against the throwaway MySQL on :3307, never SQLite. SQLite
-can't parse `detail->>'$.query'`, doesn't enforce `ENUM`, and has foreign keys off by
-default, so the analytics, cascade, and JSON tests would pass locally while proving nothing
-about the real database.
+60 tests, all passing. They run against the throwaway MySQL on :3307, never SQLite. SQLite
+can't parse `detail->>'$.query'`, has no `MATCH ... AGAINST`, doesn't enforce `ENUM`, and has
+foreign keys off by default, so the analytics, hybrid-search, cascade, and JSON tests would
+pass locally while proving nothing about the real database.
 
 Verified end-to-end against the running API (`GET /health` reports `index_consistent`):
 
@@ -441,6 +450,9 @@ Verified end-to-end against the running API (`GET /health` reports `index_consis
 - Alice with `?assigned_to=<bob>` sees only her own tasks
 - Alice reading or patching Bob's task gets 404, not 403
 - All 7 paraphrases rank #1; all 4 true-negative controls return `[]`
+- A rare proper noun the embedding model has never seen (`Impeccable`, 0.2337, below the
+  floor) is still found, by the lexical half — and the controls still return `[]`, so the
+  extra recall didn't cost precision
 - Delete removed exactly the document's `chunk_count` vectors, and the content stopped being
   searchable
 - Empty file and wrong extension return 422
@@ -617,6 +629,71 @@ Consequences worth knowing:
   with its old status, and the downgrade collapses back to the lowest user ID, marking the
   task completed only if everyone was done. Verified in both directions on real rows.
 
+### ADR-009 — Hybrid retrieval: semantic + lexical
+
+Pure dense retrieval has a blind spot that no amount of tuning closes, and I found it by
+uploading my own CV and searching for `Impeccable` — an open-source project it mentions three
+times. The search returned nothing.
+
+The cause isn't the floor, and it isn't a missing chunk. MiniLM has no vector for "Impeccable"
+the project, because it never saw one. It only knows the everyday adjective:
+
+| "Impeccable" vs | Cosine |
+|---|---|
+| "perfect, without any flaws" | 0.4627 |
+| "flawless" | 0.4017 |
+| "a software library on GitHub" | 0.0724 |
+
+So the query vector points at *flawlessness* while the chunk vector points at *software
+engineering*. They're nearly orthogonal, the chunk scores 0.2337, and the 0.2668 floor drops
+it. The literal string being right there is irrelevant — cosine similarity never looks at it.
+
+**Lowering the floor cannot fix this**, and that's the part worth knowing. Measured against
+that same CV:
+
+| Query | In the document? | Score | Old result |
+|---|---|---|---|
+| `Kubernetes` | no | 0.3732 | returned a hit |
+| `Impeccable` | yes, 3× | 0.2337 | returned nothing |
+
+The separation gap is **-0.1396**. A word that isn't there outscores a word that is, because
+"Kubernetes" has no adjective sense competing with it and sits near the skills chunk. Any floor
+low enough to admit the true positive admits the noise first. This is the mirror image of the
+[near-miss limitation](#known-limitations): that one is a false positive (right topic, absent
+fact), this is a false negative (fact present, wrong topic vector). Same root cause — cosine
+measures topical relatedness, not presence.
+
+**Decision:** add a MySQL `FULLTEXT` index on `document_chunks.content` and run it alongside
+FAISS. A result is admitted when it is semantically close **or** lexically present. Lexical
+retrieval answers the one question cosine cannot: is this string actually here?
+
+Two details are deliberate:
+
+- **The scores are never blended.** MySQL's FULLTEXT relevance and a cosine are different
+  units, and weighting them would mean inventing a coefficient — the exact thing
+  [calibration](#the-numbers-were-measured-not-guessed) exists to avoid. Instead, FULLTEXT
+  relevance ranks candidates *within* the lexical query and is then discarded. Every admitted
+  result is rescored as a cosine via `IndexIDMap2.reconstruct`, so the API returns one
+  comparable number and results still rank by descending score.
+- **`match_type` is returned** (`semantic` / `lexical` / `both`). A lexical hit reports its
+  real cosine, which is *below* the floor — 0.2337 for the case above. That reads as a bug
+  until you can see it was matched on the string rather than on meaning, so the response says
+  which. Inventing a passing score would hide the one thing worth knowing.
+
+**Rejected:** *lowering the floor* — measured above, it admits noise first. *Replacing
+embeddings with BM25* — fails the brief and every paraphrase. *Query expansion* (pad the word
+into a sentence before embedding) — guesses at what the user meant, and MiniLM still has no
+vector for the token. *A cross-encoder reranker* — reranks what retrieval already found, and
+retrieval never found this chunk at all.
+
+**Cost:** one extra index and one extra query per search. The risk is that lexical retrieval
+widens what gets admitted and quietly erodes the floor's precision, so there's a test asserting
+the control queries still return nothing.
+
+**Ceiling:** this fixes false negatives, not false positives. `Kubernetes` still returns a
+confident hit for a word that isn't in the document — that's the near-miss problem, and it
+needs a reranker.
+
 ### Security decisions
 
 - **No user enumeration.** An unknown email verifies against a dummy hash before failing, so
@@ -647,6 +724,11 @@ band as true hits by construction. Raising the floor to exclude them would rejec
 answers first. Fixing it properly needs a cross-encoder reranker or an LLM answerability
 check over the retrieved chunk. Both are out of scope here, so it's measured and documented
 rather than hidden.
+
+[Hybrid retrieval](#adr-009--hybrid-retrieval-semantic--lexical) fixes the opposite failure —
+a word that *is* present but scores too low — and does nothing for this one. A near-miss is a
+false positive; lexical retrieval only adds recall. `Kubernetes` still returns a confident hit
+against a CV that never mentions it.
 
 **The separation gap is narrow (+0.0606)** and tuned to this corpus. A different document set
 should re-run `scripts/calibrate.py` rather than inherit `0.2668`.
@@ -683,8 +765,9 @@ document versioning, real-time updates, pagination beyond limit/offset, CI.
 In priority order, with the trigger for each:
 
 1. **Cross-encoder reranker** over the top-k. Fixes the near-miss limitation above, which is
-   the biggest real quality gap. *Trigger: first user complaint about a confidently wrong
-   result.*
+   the biggest remaining quality gap now that [ADR-009](#adr-009--hybrid-retrieval-semantic--lexical)
+   has closed the false-negative half. *Trigger: first user complaint about a confidently
+   wrong result.*
 2. **Externalise the vector store.** Removes the single-worker constraint. *Trigger: first
    need to scale out.*
 3. **Sentry and structured log shipping.** Today `activity_logs` and `/health`'s

@@ -207,3 +207,66 @@ def indexed_document(db, admin_user):
     yield doc
 
     store.reset()
+
+
+@pytest.fixture
+def indexed_proper_noun(db, admin_user):
+    """A document whose key term the embedding model cannot see.
+
+    "Impeccable" is a real project name that collides with a common English
+    adjective. MiniLM has no vector for the project, only for the word meaning
+    flawless, so a chunk containing it scores 0.2001 against the query
+    "Impeccable" — under the 0.2668 floor — despite the word being right there.
+    The semantic half genuinely cannot find this, so if the test passes, the
+    lexical half is doing the work. See ADR-009.
+
+    The chunk length is load-bearing and was measured, not styled. The same
+    sentence alone scores 0.2855 and clears the floor, because a short chunk is
+    mostly its key term. Realistic chunks are ~400 characters of mixed content
+    (this one is 384), which dilutes the term until only lexical retrieval finds
+    it. A tidy one-line fixture would pass without hybrid search and prove
+    nothing.
+    """
+    from app.services.ai.embedder import embed_texts
+    from app.services.ai.vector_store import get_vector_store
+
+    doc = Document(
+        title="Engineering CV",
+        filename="cv.txt",
+        original_filename="cv.txt",
+        file_type=FileType.TXT,
+        file_size=100,
+        storage_path="uploads/cv.txt",
+        uploaded_by=admin_user.id,
+        status=DocumentStatus.INDEXED,
+    )
+    db.add(doc)
+    db.flush()
+
+    contents = [
+        "Currently a Software Engineering Intern at HeadRest designing AI-driven "
+        "automation workflows; open-source contributor to Impeccable (40k+ GitHub "
+        "stars). Final-year B.E. in Artificial Intelligence and Machine Learning. "
+        "Technical Skills. Languages: Python, JavaScript, TypeScript, SQL. "
+        "Frameworks: FastAPI, React, Node.js. Databases: MySQL, PostgreSQL, Redis. "
+        "Tools: Docker, Git, Linux.",
+        "Built a retrieval service in Python using FastAPI, MySQL and Docker "
+        "for document ingestion.",
+    ]
+    chunks = [
+        DocumentChunk(document_id=doc.id, chunk_index=i, content=c, token_count=len(c.split()))
+        for i, c in enumerate(contents)
+    ]
+    db.add_all(chunks)
+    db.flush()
+
+    doc.chunk_count = len(chunks)
+    db.commit()
+
+    store = get_vector_store()
+    store.reset()
+    store.add(embed_texts(contents), [c.id for c in chunks])
+
+    yield doc
+
+    store.reset()
