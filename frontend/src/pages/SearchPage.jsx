@@ -30,8 +30,8 @@ export default function SearchPage() {
   return (
     <>
       <PageHeader
-        title="Semantic search"
-        description="Meaning-based search over the knowledge base — paraphrases work, exact keywords are not required."
+        title="Hybrid search"
+        description="Meaning and exact text, together. Paraphrases match by embedding; a rare name the model has never seen is still found by the words themselves."
       />
 
       <form onSubmit={handleSubmit} className="mb-6 flex gap-2">

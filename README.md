@@ -34,6 +34,21 @@ the point. The match is semantic, not lexical.
 
 ![Semantic search](docs/screenshots/04-search-results.png)
 
+Hybrid retrieval, and the bug that forced it. `Impeccable` is a project name in an uploaded CV.
+The embedding model has never seen it — it only knows the adjective — so the chunk scores 0.234
+against a 0.268 floor and pure semantic search returned nothing at all. The lexical half finds
+it on the literal string. The badge says how it matched and the score is the real cosine,
+reported below the floor rather than dressed up. See
+[ADR-009](#adr-009--hybrid-retrieval-semantic--lexical).
+
+![Hybrid search finding a rare proper noun](docs/screenshots/07-hybrid-search.png)
+
+The other half, still working. This query shares no words with result #2 — nothing is
+highlighted in it, because nothing lexical matched. It's there on meaning alone (`semantic`,
+0.293). Results #1 and #3 matched both ways.
+
+![Hybrid search matching semantically](docs/screenshots/08-hybrid-semantic.png)
+
 Analytics. Every number comes from live tables and the activity log. "Most searched queries"
 is a MySQL JSON-path aggregation over `activity_logs.detail`, not a hardcoded list.
 
