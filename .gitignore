@@ -34,6 +34,14 @@ PLAN.md
 *.pdf
 !sample_docs/*.pdf
 
+# Local AI-agent rule files — tooling, not deliverable
+AGENTS.md
+.cursor/
+.windsurf/
+.clinerules/
+.opencode/
+.github/copilot-instructions.md
+
 # Editors / OS
 .vscode/
 .idea/
