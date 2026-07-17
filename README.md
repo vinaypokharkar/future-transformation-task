@@ -596,6 +596,12 @@ whole extra service and out of scope for an MVP.
 - **Healthchecks use `127.0.0.1`, not `localhost`.** nginx binds `0.0.0.0` (IPv4), while
   `localhost` resolves to `[::1]` first inside the container, so a perfectly healthy
   container reports `Connection refused` forever.
+- **`.gitattributes` pins shell scripts to LF.** Git stores text as LF and, on Windows with
+  the default `core.autocrlf=true`, checks it back out as CRLF. Harmless for source, fatal for
+  anything Linux runs: `COPY` carries the CRLF into the image, the kernel reads the shebang as
+  `bash\r`, and the container dies with `env: 'bash\r': No such file or directory` before
+  executing a line. The trap is that it hides from whoever built the image first and hits
+  everyone who clones afterwards — the build is reproducible, the checkout isn't.
 
 ### ADR-008 — Per-assignee status on a join table
 

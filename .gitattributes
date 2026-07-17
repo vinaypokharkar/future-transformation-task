@@ -1,0 +1,18 @@
+# Git stores text files with LF and, on Windows with the default
+# core.autocrlf=true, checks them back out with CRLF. That is invisible for
+# source code and fatal for anything Linux executes.
+#
+# docker-entrypoint.sh is the case that bites: COPY carries the CRLF into the
+# image, the kernel reads the shebang as `bash\r`, and the container dies with
+#
+#   env: 'bash\r': No such file or directory
+#
+# before running a single command. The failure only appears when the image is
+# rebuilt from a Windows checkout, so it hides from whoever built the image
+# first and hits everyone who clones afterwards.
+#
+# These files run inside containers. They keep LF on every platform.
+*.sh text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+docker-compose.yml text eol=lf
